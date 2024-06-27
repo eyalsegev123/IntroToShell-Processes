@@ -130,7 +130,7 @@ static cmdLine* _parseCmdLines(char *line)
 	return pCmdLine;
 }
 
-cmdLine *parseCmdLines(const char *strLine)
+cmdLine* parseCmdLines(const char *strLine)
 {
 	char* line, *ampersand;
 	cmdLine *head, *last;
