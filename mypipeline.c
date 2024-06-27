@@ -62,6 +62,5 @@ int main() {
             fprintf(stderr, "(parent_process>exiting...)\n");
         }
     }
-
     return EXIT_SUCCESS;
 }

@@ -14,6 +14,8 @@
 #define TERMINATED  -1
 #define RUNNING 1
 #define SUSPENDED 0
+#define HISTLEN 20
+#define MAX_BUF 200
 
 #ifndef MAX_INPUT
 #define MAX_INPUT 2048
@@ -27,11 +29,16 @@ typedef struct process{
         struct process *next;	                  /* next process in chain */
 } process;
 
+char history[HISTLEN][MAX_BUF];
+int newest = -1;
+int oldest = 0;
+int history_count = 0;
+
 int handleCDcommand(cmdLine * pCmdLine , bool debug);
 void handle_signal_commands(cmdLine *pCmdLine , bool debug, process** process_list);
 void handleRedirection(cmdLine * pCmdLine);
 void show_history(); 
-char* get_command_from_history(int number); 
+char* get_command_from_history(int index); 
 int is_numeric(const char *str);
 int addToHistory(char* command);   
 void clean(char* fileName);
@@ -40,6 +47,7 @@ void printProcessList(process** process_list);
 void freeProcessList(process* process_list);
 void updateProcessStatus(process* process_list, int pid, int status);
 void updateProcessList(process** process_list);
+
 
 void addProcess(process** process_list, cmdLine* cmd, pid_t pid) {
     process* newProcess = malloc(sizeof(process));
@@ -78,7 +86,7 @@ void updateProcessList(process** process_list) {
 
     while (current != NULL) {
         pid_t result = waitpid(current->pid, &status, WNOHANG);
-        if (result == -1 || WIFEXITED(status)) {
+        if (result != 0 || WIFEXITED(status)) {
             // Process is terminated
             current->status = TERMINATED;
             printf("PID %d: %s Terminated\n", current->pid, current->cmd->arguments[0]);
@@ -206,50 +214,34 @@ void handle_signal_commands(cmdLine *pCmdLine , bool debug, process** process_li
     }
 }
 
-void show_history() {
-    FILE *file = fopen("shellHistory", "r");
-    if (file == NULL) {
-        perror("Error opening history file");
-        return;
-    }
-    char line[256];
-    int line_number = 1;
-    while (fgets(line, sizeof(line), file)) {
-        printf("%d %s", line_number++, line);
-    }
-    fclose(file);
-}
+int addToHistory(char* command) {
+    newest = (newest + 1) % HISTLEN;
+    strncpy(history[newest], command, MAX_BUF - 1);
+    history[newest][ MAX_BUF - 1] = '\0'; // Ensure null termination
 
-char* get_command_from_history(int number) {
-    FILE *file = fopen("shellHistory", "r");
-    if (file == NULL) {
-        perror("Error opening history file");
-        return NULL;
+    if (history_count < HISTLEN) {
+        history_count++;
+    } else {
+        oldest = (oldest + 1) % HISTLEN;
     }
-    char line[256];
-    int line_number = 1;
-    while (fgets(line, sizeof(line), file)) {
-        if (line_number == number) {
-            fclose(file);
-            return strdup(line);
-        }
-        line_number++;
-    }
-    fclose(file);
-    return NULL;
-}
-
-int addToHistory(char* command){
-    FILE* shellHistory = fopen("shellHistory", "a");
-    if(shellHistory == NULL)
-    {
-        perror("Error opening history file");
-        return EXIT_FAILURE;
-    }
-    fprintf(shellHistory, "%s", command);
-    fclose(shellHistory);
     return 1;
 }
+
+void show_history() {
+    for (int i = 0; i < history_count; i++) {
+        int index = (oldest + i) % HISTLEN;
+        printf("%d %s", i + 1, history[index]);
+    }
+}
+
+char* get_command_from_history(int index) {
+    if (index < 1 || index > history_count) {
+        fprintf(stderr, "No such command in history.\n");
+        return NULL;
+    }
+    return strdup(history[(oldest + index - 1) % HISTLEN]);
+}
+
 
 void clean(char* fileName){
     // Open the file in write mode
@@ -270,7 +262,6 @@ void clean(char* fileName){
 }
 
 void execute(cmdLine *pCmdLine, bool debug, process** process_list) {
-    updateProcessList(process_list);
     // Handle built-in commands and special cases first
     if (handleCDcommand(pCmdLine, debug) == 1) {
         return;
@@ -282,10 +273,19 @@ void execute(cmdLine *pCmdLine, bool debug, process** process_list) {
     else if (pCmdLine->arguments[0][0] == '!') {
         if (is_numeric(pCmdLine->arguments[0] + 1)) {
             int number = atoi(pCmdLine->arguments[0] + 1);
-            cmdLine *newCommand = parseCmdLines(get_command_from_history(number));
+            char* commandSt = get_command_from_history(number);
+            cmdLine *newCommand = parseCmdLines(commandSt);
             execute(newCommand, debug, process_list);
             freeCmdLines(newCommand); // Free allocated memory for cmdLine structure
-        } else {
+        }
+        else if(strcmp(pCmdLine->arguments[0] + 1 , "!") == 0)
+        {
+            char* commandSt = get_command_from_history(newest);
+            cmdLine *newCommand = parseCmdLines(commandSt);
+            execute(newCommand, debug, process_list);
+            freeCmdLines(newCommand); // Free allocated memory for cmdLine structure
+        }
+        else {
             perror("Invalid command");
         }
         return;
@@ -293,6 +293,7 @@ void execute(cmdLine *pCmdLine, bool debug, process** process_list) {
     else if(strcmp(pCmdLine->arguments[0], "procs") == 0)
     {
         printProcessList(process_list);
+        updateProcessList(process_list);
         return;
     }
     else if (strcmp(pCmdLine->arguments[0], "alarm") == 0 || 
@@ -358,7 +359,8 @@ void execute(cmdLine *pCmdLine, bool debug, process** process_list) {
         waitpid(pid2, NULL, 0);
         updateProcessStatus(*process_list, pid2, TERMINATED);
 
-    } else {
+    } 
+    else {
         // Execute a single command (no pipeline)
         pid_t pid = fork();
         if (pid == -1) {
